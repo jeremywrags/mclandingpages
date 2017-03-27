@@ -1,0 +1,662 @@
+<script type="text/javascript" runat="server">
+Platform.Load("core", "1");
+
+var action = GetParameter("action");
+var projects = GetParameter("Projects");
+var eid = GetParameter("eid")
+var pms = GetParameter("Pms");
+switch (action) {
+
+    case "utilForm":
+
+        var out = RecordUtil();        
+        Write(Stringify(out));
+        Write("|~|~|"); 
+        break;
+    case "RetrieveForecast":
+        var out = new Object();
+
+        
+        
+        //Filter for the PSE Forecasts
+        var filter = {
+            Property: "ConsultantEmail",
+            SimpleOperator: "equals",
+            Value: eid
+        };
+
+        //Filter for the consultant Forecasts
+        var now = new Date();
+        var today = new Date(now.getFullYear(), now.getMonth(), now.getDate());
+        var lastSunday = new Date(today.setDate(today.getDate()-today.getDay()));
+
+        var complexfilter = {
+                LeftOperand:{
+                    Property:"ConsultantEmail",
+                    SimpleOperator:"equals",
+                    Value: eid
+                },
+                LogicalOperator:"AND",
+                RightOperand:{
+                    Property:"WeekSubmitted",
+                    SimpleOperator:"equals",
+                    Value: lastSunday                    
+        }};
+
+        out.Debug = "lastSunday" + lastSunday;
+        var filter = {
+            Property: "ConsultantEmail",
+            SimpleOperator: "equals",
+            Value: eid
+        };
+
+        out.PSEData = DataExtension_RetrieveFilteredRows("PSEForecasts",filter).result;
+        out.ConsultantData = DataExtension_RetrieveFilteredRows("ConsultantForecasts",complexfilter).result;
+        out.ProjectNotes = DataExtension_RetrieveFilteredRows("ConsultantForecastsNotes",filter).result;
+        out.AlreadySubmitted = out.ConsultantData.length > 0 ? true : false;
+
+        Write(Stringify(out));
+        Write("|~|~|");
+        break;
+}
+
+
+
+
+function DataExtensionField_List(deName) {
+    var Output = new Object();
+    try {
+
+        var de = DataExtension.Init(deName);
+        var rows2 = de.Rows.Retrieve();
+        var fields = de.Fields.Retrieve();
+
+        Output.Data = fields;
+        Output.Valid = true;
+        Output.Message = "Nothing Interesting";
+    } catch (err) {
+        Output.Data = null;
+        Output.Valid = false;
+        Output.Message = Stringify(err);
+    }
+    return Output;
+}
+
+function RecordUtil()
+{
+
+    var Output = new Object();
+    var forecasts = new Array();
+    var AlreadySubmitted = GetParameter("AlreadySubmitted");
+
+    try
+    {         
+        //Retrieve all post data
+        var _post = Platform.Request.GetPostData('utf-8');            
+        var hours = 0;
+        var values = "";
+        var rows = 0;
+
+        var now = new Date();
+        var today = new Date(now.getFullYear(), now.getMonth(), now.getDate());
+        var lastSunday = new Date(today.setDate(today.getDate()-today.getDay()));
+
+        //How many rows & weeks are we processing    
+        var numRows = parseInt(GetParameter("numRows"));
+        var numWeeks= parseInt(GetParameter("numWeeks"));   
+
+        Output.NumRows = numRows;
+        Output.NumWeeks = numWeeks
+        
+        try{
+            for(var i = 0; i < numRows; i++){   
+                
+                for(var j = 1; j < numWeeks; j++)
+                {                               
+                    hours = GetParameter("row" + i + "_week" + j + "_hours");                        
+                    values = GetParameter("row" + i + "_week" + j + "_values");                        
+                    vArr = values.split("_|_");                                                         
+                                                      
+                    forecasts.push({Project:vArr[0], ProjectManager:vArr[1], ConsultantEmail:vArr[2], WeekStarting:vArr[3], Hours:hours, Consultant: vArr[4], WeekSubmitted: lastSunday});         
+
+                    var filter = ["Project", "ProjectManager", "ConsultantEmail", "WeekStarting"];
+                    var filterValues = [vArr[0], vArr[1], vArr[2], vArr[3]];
+                    var columns = ["Hours", "Consultant", "WeekSubmitted"];
+                    var values = [hours, vArr[4],  lastSunday];
+                    
+                    rows += Platform.Function.UpsertData("ConsultantForecasts",filter,filterValues,columns,values);                                                                     
+                }                        
+            } 
+            //Output.ConsultantForecasts = forecasts;                       
+
+            Output.ForecastStatus = "Success";
+            Output.ForecastRows = rows;
+            Output.ForecastMessage = "Your forecasts have been submitted, " + rows + " have been written to the database"; 
+
+        }catch(err){
+            Output.ForecastError = "true"
+            Output.ForecastErrorMessage = Stringify(err);
+        }                
+
+
+        try{
+            //Update the Consultant DE to show that the forecast has been submitted
+
+            var ConsultantsDE = DataExtension.Init("Consultants");
+            Output.ConsultantSubmitStatusRecordsUpdated = ConsultantsDE.Rows.Update({"Submitted":"True"}, ["EmailAddress"], [eid]);
+            Output.ConsultantSubmitStatusMessage = "The consultant submit has been recorded"
+            
+        }
+        catch(err){
+            Output.ConsultantSubmitStatusError = "true"
+            Output.ConsultantSubmitStatusErrorMessage = Stringify(err);
+        }         
+
+        //Now update the project Notes
+        var projectArr = projects.split("_|_");
+        //Output.projectArr = projectArr;
+
+        var pmArr = pms.split("_|_");
+        //Output.pmArr = pmArr;
+        
+        var arrNotes = new Array();
+
+        for(var i = 0; i < projectArr.length; i++){
+
+            arrNotes.push({ConsultantEmail: eid, Project:projectArr[i], ProjectManager: pmArr[i], Notes: GetParameter(projectArr[i] + "_notes")});
+
+
+            (rows = Platform.Function.UpsertData("ConsultantForecastsNotes",["ConsultantEmail", "Project", "ProjectManager"],[eid, projectArr[i], pmArr[i]],["Notes"],[GetParameter(projectArr[i] + "_notes")]));
+
+
+        }        
+        Output.NotesStatus = "Success";        
+        Output.NotesMessage = "Project notes have been updated.";             
+    }
+    catch(err)
+    {
+        Output.Status = "Error";                
+        Output.Message = Stringify(err);                    
+    }
+    Output.Status = "Success";
+    Output.Message = "Your forecasts have been submitted";
+    return Output;    
+}
+function DataExtension_List() {
+    var Output = new Object();
+    try {
+
+        var retrieveRequest = Platform.Function.CreateObject("RetrieveRequest");
+        Platform.Function.SetObjectProperty(retrieveRequest, "ObjectType", "DataExtension");
+        Platform.Function.AddObjectArrayItem(retrieveRequest, "Properties", "CustomerKey");
+        Platform.Function.AddObjectArrayItem(retrieveRequest, "Properties", "Name");
+        Platform.Function.AddObjectArrayItem(retrieveRequest, "Properties", "CategoryID");
+
+        var reqParams = [0, 0];
+        var result = Platform.Function.InvokeRetrieve(retrieveRequest, reqParams);
+
+        /*var folder;
+        for(var i = 0; i < result.length; i++)
+        {
+            folder = Folder.Retrieve({Property:"ID",SimpleOperator:"equals",Value:result[i].CategoryID});
+            result[i].FolderName = folder[0].Name;
+        }
+        Output.Folder = folder;
+        */
+        Output.Data = result;
+        Output.Valid = true;
+        Output.Message = "Nothing Interesting";
+    } catch (err) {
+        Output.Data = null;
+        Output.Valid = false;
+        Output.Message = Stringify(err);
+    }
+    return Output;
+}
+
+function DataExtension_RetrieveFilteredRows(de, filter) {
+    var Output = new Object();
+
+    try {
+        var de = DataExtension.Init(de);
+        Output.result = de.Rows.Retrieve(filter);
+
+    } catch (err) {
+        Output.ErrorMessage = err;
+    }
+    return Output;
+}
+
+function DataExtension_RetrieveRows(deName) {
+
+    var Output = new Object();
+
+    try {
+        var de = DataExtension.Init(deName);
+        Output.data = de.Rows.Retrieve();
+    } catch (err) {
+        Output.ErrorMessage = err;
+    }
+    return Output;
+}
+
+function DataExtension_GetFields(deName) {
+
+    var Output = new Object();
+
+    try {
+        var de = DataExtension.Init(deName);
+        Output.Fields = de.Fields.Retrieve();
+    } catch (err) {
+        Output.ErrorMessage = err;
+    }
+    return Output;
+}
+
+function DataExtension_InsertRow(deName, data) {
+
+    var Output = new Object();
+    Write(data);
+    try {
+        var de = DataExtension.Init(deName);
+        de.Rows.Add(data);
+    } catch (err) {
+        Output.ErrorMessage = err;
+    }
+    return Output;
+}
+
+function Folder_retrieve(categoryID) {
+    var folders = new Array();
+    try {
+        //Folders for Category categoryID
+        var result = Folder.Retrieve({
+            Property: "ParentFolder.ID",
+            SimpleOperator: "equals",
+            Value: categoryID.toString()
+        });
+
+        //For each folder get the folders and the DEs in that folder
+        for (var i = 0; i < result.length; i++) {
+            var folder = new Object();
+            folder.ID = result[i].ID;
+            folder.Name = result[i].Name
+            folder.DataExtensions = GetDataExtensions(result[i].ID);
+            folder.Children = GetFolders(result[i].ID);
+            folders.push(folder);
+        }
+
+    } catch (err) {
+        return categoryID;
+    }
+
+    return folders;
+}
+
+function GetParameter(name) {
+    var Output = new Object();
+    var parm = "";
+    try {
+        if (Request.GetQueryStringParameter(name))
+            parm = Request.GetQueryStringParameter(name);
+        else
+            parm = Request.GetFormField(name);
+        Output.Status = true;
+    } catch (err) {
+        Output.Status = false;
+    }
+    Output.Value = parm;
+
+    return parm;
+}
+</script>
+<!DOCTYPE html>
+<html lang="en">
+
+<head>
+    <meta charset="utf-8">
+    <meta http-equiv="X-UA-Compatible" content="IE=edge">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <!-- The above 3 meta tags *must* come first in the head; any other head content must come *after* these tags -->
+    <title>Centralized Manager Portal</title>
+   
+    <!--script src="https://ajax.googleapis.com/ajax/libs/jquery/1.12.4/jquery.min.js"></script-->
+    <script
+              src="https://code.jquery.com/jquery-3.1.1.min.js"
+              integrity="sha256-hVVnYaiADRTO2PzUGmuLJr8BLUSjGIZsDYGmIJLv2b8="
+              crossorigin="anonymous"></script>
+    <link rel="stylesheet" href="https://maxcdn.bootstrapcdn.com/bootstrap/4.0.0-alpha.4/css/bootstrap.min.css" integrity="sha384-2hfp1SzUoho7/TsGGGDaFdsuuDL0LX2hnUp6VkX3CUQ2K4K+xjboZdsXyp4oUHZj" crossorigin="anonymous">    
+    <script src="http://cdnjs.cloudflare.com/ajax/libs/datejs/1.0/date.min.js"></script>
+    <script src="https://www.atlasestateagents.co.uk/javascript/tether.min.js"></script><!-- Tether for Bootstrap --> 
+    <script src="https://cdn.rawgit.com/twbs/bootstrap/v4-dev/dist/js/bootstrap.min.js"></script><!-- Bootstrap --> 
+        
+    <style type="text/css">
+        /* style.css */
+
+.gradientBG{
+    
+    background-color: #00A1E0; /* For browsers that do not support gradients */
+   
+}
+hr {
+    display: block;
+    height: 1px;
+    border: 0;
+    border-top: 1px solid #00A1E0;
+    margin: 1em 0;
+    padding: 0; 
+}
+th{
+    background-color: #00A1E0;
+    color:#fff;
+}
+.table-striped>tbody>tr:nth-child(even)>td, 
+.table-striped>tbody>tr:nth-child(even)>th {
+   background-color: ##DADADA;
+   color:#000;
+}
+#container{
+    padding:10px;
+    background-color: #fff;
+}
+#content{
+    padding: 10px;
+}
+    </style>
+    <script type="text/javascript">
+
+    var weeksToShow = 4;
+    var consultantForecasts;
+    var pseForecasts;
+    var projectNotes;
+    var AlreadySubmitted = false;
+
+    $(document).ready(function() {
+    
+
+        //*********************************************************************************************************************************
+        // Form Submit Function, this is the mechanism responsible for submitting the forecasts back to the data extension        
+        //*********************************************************************************************************************************        
+
+        $(document).on("submit", "form", function(e){
+            e.preventDefault();           
+
+        
+            if(AlreadySubmitted){
+                $("#modalHeader").html("Forecasting Status");
+                $("#modalBody").html("Forecasts can only be submitted once per week");
+                $('#myModal').modal('show');
+                setTimeout(function() { $('#myModal').modal('hide');}, 5000);
+                return false;
+            }
+            $.ajax({
+                type: "POST",
+                url: "%%=RequestParameter("
+                PAGEURL ")=%%",
+                data: $("#utilForm").serialize(),
+                success: function(data) {
+                    var json = data.split('|~|~|')[0].replace(/\s+$/, "");
+                    json = json.replace(", ]", "]");
+                    AlreadySubmitted = true;
+                    try {
+                        data = $.parseJSON(json);                      
+                        $("#modalHeader").html(data.Status);
+                        $("#modalBody").html(data.Message);
+                        $('#myModal').modal('show');
+                        setTimeout(function() { $('#myModal').modal('hide');}, 5000);
+
+                        $('#content').html('<p>Your forecasts have been submitted, if you need to make any changes please reach out to the Project Manager directly.</p>');
+                        
+                    } catch (msg) {
+
+                    }
+                }
+            });
+            return  false;
+        });           
+
+        //*********************************************************************************************************************************
+        // This is the function responsible for retrieving the PSE forecasts and transforming then for display
+        //*********************************************************************************************************************************        
+        $.ajax({
+            type: "POST",
+            url: "%%=RequestParameter("
+            PAGEURL ")=%%",
+            data: "action=RetrieveForecast",
+            success: function(data) {                
+                var json = data.split('|~|~|')[0].replace(/\s+$/, "");
+                json = json.replace(", ]", "]");
+                mydata = $.parseJSON(json);
+
+                projectNotes = mydata.ProjectNotes;
+                AlreadySubmitted = mydata.AlreadySubmitted;
+                //*********************************************************************************************************************************
+                // Transform the PSE Forecast
+                //*********************************************************************************************************************************                        
+                var dict = mydata.PSEData.reduce(function(p, c) {
+                    // We'll use the combination of PM,e,c and p to build a key
+                    var key = [c.ProjectManager, c.ConsultantEmail, c.Consultant, c.Project].join("-");
+                    //var key = [c.ConsultantEmail, c.Consultant, c.Project].join("-");
+                    
+                    if (p[key]) {
+                        // If we've seen this key before, we'll just add to the Details
+                        p[key].Details.push({
+                            WeekStarting: Date.parse(c.WeekStarting).toString('M/d/yyyy') ,
+                            Hours: c.Hours
+                        });
+                    } else {
+                        // otherwise we create a new entry and populate it
+                        p[key] = {
+                            ProjectManager: c.ProjectManager,
+                            Consultant: c.Consultant,
+                            ConsultantEmail: c.ConsultantEmail,
+                            Project: c.Project,
+                            Details: [{
+                                WeekStarting: Date.parse(c.WeekStarting).toString('M/d/yyyy') ,
+                                Hours: c.Hours
+                            }]
+                        }
+                    }
+                    return p;
+                }, {});
+
+                // We now have a dictionary
+                //console.log(dict);
+
+                // If you really need an array (and don't care about order), we can transform
+                // the dictonary to an array (order is not guaranteed here)
+                var pseForecasts = Object.keys(dict).map(function(a) {
+                    return dict[a];
+                });       
+
+                //console.log(JSON.stringify(pseForecasts));
+         
+
+                //*********************************************************************************************************************************
+                // End Transform the PSE Forecast
+                //*********************************************************************************************************************************                        
+
+                //*********************************************************************************************************************************
+                // Transform the Consultant Forecast
+                //*********************************************************************************************************************************                        
+                var dict = mydata.ConsultantData.reduce(function(p, c) {
+                    // We'll use the combination of PM,e,c and p to build a key
+                    var key = [c.ProjectManager, c.ConsultantEmail, c.Consultant, c.Project].join("-");
+                    //var key = [c.ConsultantEmail, c.Consultant, c.Project].join("-");
+                    
+                    if (p[key]) {
+                        // If we've seen this key before, we'll just add to the Details
+                        p[key].Details.push({
+                            WeekStarting: Date.parse(c.WeekStarting).toString('M/d/yyyy') ,
+                            Hours: c.Hours
+                        });
+                    } else {
+                        // otherwise we create a new entry and populate it
+                        p[key] = {
+                            ProjectManager: c.ProjectManager,
+                            Consultant: c.Consultant,
+                            ConsultantEmail: c.ConsultantEmail,
+                            Project: c.Project,
+                            Details: [{
+                                WeekStarting: Date.parse(c.WeekStarting).toString('M/d/yyyy') ,
+                                Hours: c.Hours
+                            }]
+                        }
+                    }
+                    return p;
+                }, {});
+
+                // We now have a dictionary
+                //console.log(dict);
+
+                // If you really need an array (and don't care about order), we can transform
+                // the dictonary to an array (order is not guaranteed here)
+                var consultantForecasts = Object.keys(dict).map(function(a) {
+                    return dict[a];
+                });          
+
+               
+                BuildUI(pseForecasts, consultantForecasts);
+                            
+            }
+        });
+
+    function BuildUI(pseData, consultantData){  
+
+        var html = '<form id="utilForm"><input type="hidden" name="numRows" value="' + pseData.length + '"><input type="hidden" name="numWeeks" value="' + weeksToShow + '">';    
+        html +='<input type="hidden" name="action" value="utilForm"><input type="hidden" name="AlreadySubmitted" value="' + AlreadySubmitted + '"><table class="table table-striped"><thead class="thead"><th>Project</th><th>Project Manager</th><th></th>';
+                
+
+        $("#consultantName").html("Welcome, " + pseData[0].Consultant + "<p>Please review your PSE forecasts and submit your updates for review.</p>");
+
+        for(var l = 0; l < weeksToShow; l++){
+            html+= '<th>' + pseData[0].Details[l].WeekStarting + '</th>'
+        }
+
+        html+= '</thead>';
+        var projects = "";
+        var pms = "";
+        var note = "";
+
+        for(var i=0; i < pseData.length; i++){
+         
+            projects += pseData[i].Project + "_|_";
+            pms += pseData[i].ProjectManager + "_|_";
+
+            html+= '<tr><td>' + pseData[i].Project + '</td><td>' + pseData[i].ProjectManager+ '</td><td>PSE Forecast</td>';        
+            var details = pseData[i].Details;        
+            //console.log(JSON.stringify(pseData[i]));
+            for(var j = 0; j < weeksToShow; j++){           
+                try{                
+                    html += '<td>' + details[j].Hours;               
+                    html += '</td>';
+
+                }catch(err){
+                    for(var k = 0; k < weeksToShow - j; k++)
+                        html += '<td></td>';
+                }            
+            }
+            html += '</tr>';          
+            
+            if (typeof projectNotes !== 'undefined' && projectNotes.length > 0) {
+                try{
+                 note = projectNotes.find(x => (x.Project == pseData[i].Project && x.ProjectManager == pseData[i].ProjectManager)).Notes
+                }
+                catch(err){                
+                    note = "";
+                }
+            } 
+            
+         
+            html+= '<tr><td colspan="3"><input placeholder="Project Notes" name="' + pseData[i].Project + '_notes" style="width:600px;" type="text" value="' + note + '"></td>';
+            var details = pseData[i].Details;                     
+            var hours = "";        
+        
+            for(var m = 0; m < weeksToShow; m++){                             
+                
+                //console.log("m=" + m + " --- i=" +i)
+                //console.log(pseData[i].Details[m]);
+                if(m == 0 )
+                {                
+                    html += '<td><input name="row' + i + '_week' + m + '_hours" style="width:50px;" type="text" disabled value="">';
+                    html += '<input type="hidden" name="row' + i + '_week' + m + '_values" value="' + pseData[i].Project + '_|_' + pseData[i].ProjectManager + '_|_' +  pseData[i].ConsultantEmail + '_|_' + details[m].WeekStarting + '_|_' + pseData[i].Consultant + '">';
+                    html += '</td>';
+                }
+                else
+                {
+                    if(consultantData.length > 0)
+                        hours = consultantData[i].Details[m-1].Hours;
+                    else
+                    {
+                        hours = pseData[i].Details[m].Hours
+                    }
+
+                    html += '<td><input name="row' + i + '_week' + m + '_hours" style="width:50px;" type="text" value="' + hours  + '">';
+                    html += '<input type="hidden" name="row' + i + '_week' + m + '_values" value="' + pseData[i].Project + '_|_' + pseData[i].ProjectManager + '_|_' +  pseData[i].ConsultantEmail + '_|_' + details[m].WeekStarting + '_|_' + pseData[i].Consultant + '">';
+                    html += '</td>';
+                }            
+            }        
+            html += '</tr>';
+
+        }
+                                
+
+        html += '</table><input type="hidden" name="Projects" value="' + projects + '"><input type="hidden" name="Pms" value="' + pms + '"><input type="hidden" name="eid" value="' + pseData[0].ConsultantEmail + '"><button type="submit" class="btn btn-default">Submit</button></form>';
+
+        $("#content").html(html);
+
+    }
+
+
+
+    });
+</script>
+</head>
+
+<body class="gradientBG">
+<div id="container">
+    <div id="header" style="margin-bottom: 20px;">
+        <img style="float:left;" src="https://help.marketingcloud.com/Content/sfmchelp-assets/images/bg-sfmchelp-logo.png">   
+        <div id="loadingDiv" style="float:left; position: relative; left:-200px;bottom: -45px;">
+        <img src="http://jwrdev.com/hubapps/ajax-loader.gif" style="width:50px;">
+        </div>
+            <script>var $loading = $('#loadingDiv').hide();
+            $(document)
+              .ajaxStart(function () {
+                $loading.show();
+              })
+              .ajaxStop(function () {
+                $loading.hide();
+              });
+            </script>     
+        <div id="consultantDetails" style="float:right; position: relative; bottom: -15px;">
+            <div style="text-align: right;" id="consultantName"></div>        
+        </div>
+
+    </div>
+    <br style="clear:both;">   
+  </div>  
+  
+  <div id="content" style="background-color: #fff; ">
+            
+  </div>        
+          
+        <div class="modal" id="myModal" role="dialog">
+            <div class="modal-dialog modal-lg">
+              <div class="modal-content">
+                <div class="modal-header">
+                  <button type="button" class="close" data-dismiss="modal">&times;</button>
+                  <h4 class="modal-title" id="modalHeader">Modal Header</h4>
+                </div>
+                <div class="modal-body" id="modalBody">                  
+                <img id="modalSpinner" src="https://cdn-prod.kampyle.com/resources/onsite/images/kloader.gif">
+                </div>
+                <div class="modal-footer">
+                  
+                </div>
+              </div>
+        </div>        
+
+</body>
+
+</html>
